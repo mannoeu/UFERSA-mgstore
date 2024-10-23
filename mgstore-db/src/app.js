@@ -1,5 +1,6 @@
 const fastify = require("fastify")({ logger: true });
 const knex = require("knex")(require("../knexfile").development);
+const Apriori = require("node-apriori");
 
 fastify.decorate("knex", knex);
 
@@ -227,6 +228,61 @@ fastify.get("/campanhas/resultado-por-canal", async (request, reply) => {
   }, []);
 
   reply.send(resultado);
+});
+
+function calcularIdade(dataNascimento) {
+  const hoje = new Date();
+  const nascimento = new Date(dataNascimento);
+  let idade = hoje.getFullYear() - nascimento.getFullYear();
+  const mes = hoje.getMonth() - nascimento.getMonth();
+  if (mes < 0 || (mes === 0 && hoje.getDate() < nascimento.getDate())) {
+    idade--;
+  }
+  return idade;
+}
+
+// Função para buscar perfil de clientes de um produto específico
+async function getCustomerProfile(id_produto) {
+  const clientes = await knex("Fato_Vendas")
+    .join("Dim_Cliente", "Fato_Vendas.id_cliente", "Dim_Cliente.id_cliente")
+    .where("Fato_Vendas.id_produto", id_produto)
+    .select("Dim_Cliente.genero", "Dim_Cliente.idade");
+
+  // Processar dados de perfil (calcular idades e agrupar por sexo)
+  const perfil = clientes.reduce((acc, cliente) => {
+    const genero = cliente.genero;
+
+    if (!acc[genero]) {
+      acc[genero] = { contador: 0, idade_soma: 0 };
+    }
+
+    acc[genero].contador += 1;
+    acc[genero].idade_soma += cliente.idade;
+    return acc;
+  }, {});
+
+  // Retornar a média de idade por sexo
+  const resultado = Object.keys(perfil).map((genero) => ({
+    genero,
+    mediaIdade: perfil[genero].idade_soma / perfil[genero].contador,
+    quantidade: perfil[genero].contador,
+  }));
+
+  return resultado;
+}
+
+fastify.get("/insights/customer-profile/:productId", async (request, reply) => {
+  const { productId } = request.params;
+
+  try {
+    const perfil = await getCustomerProfile(productId);
+    return reply.send({
+      message: `Perfil dos clientes que compraram o produto ${productId}`,
+      perfil,
+    });
+  } catch (error) {
+    reply.status(500).send({ error: "Erro ao buscar perfil dos clientes" });
+  }
 });
 
 fastify.listen({ port: 3333 }, (err, address) => {
